@@ -7,6 +7,11 @@ on:
   workflow_dispatch:
 
 jobs:
+    - name: 🚫 Disable iOS
+      run: flutter config --no-enable-ios
+  
+    - name: ✅ Accept Android licenses
+      run: yes | sdkmanager --licenses
   build:
     runs-on: ubuntu-latest
 
