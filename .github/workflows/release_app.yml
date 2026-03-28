@@ -19,7 +19,10 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
-
+      
+      - name: 📦 Setup Android SDK
+        uses: android-actions/setup-android@v3
+  
       - name: 🐦 Setup Flutter (stable)
         uses: subosito/flutter-action@v2
         with:
@@ -31,12 +34,6 @@ jobs:
 
       - name: 📦 Install dependencies
         run: flutter pub get
-
-      - name: ✅ Accept Android licenses
-        run: yes | sdkmanager --licenses
-
-      - name: 🧱 Install CMake
-        run: sdkmanager "cmake;3.22.1"
 
       - name: 📱 Build APK
         run: flutter build apk --release
