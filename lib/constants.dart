@@ -107,4 +107,5 @@ class Preferences {
 class PlatformChannels {
   static const demixing = 'demixing';
   static const demixingProgress = 'demixing/progress';
+  static const audioExport = 'audio_export';
 }
