@@ -164,7 +164,7 @@ public class DemixingPlugin implements FlutterPlugin, MethodCallHandler, EventCh
      * @throws IOException
      * @throws WavFileException
      */
-    private Map<String, WavFile> createFiles(String[] stemNames, String outputDir, int numChannels, int numFrames,
+    private Map<String, WavFile> createFiles(String[] stemNames, String outputDir, int numChannels, long numFrames,
             int numBits, int sampleRate) throws IOException, WavFileException {
         Map<String, WavFile> stemFiles = new HashMap<>();
 
@@ -220,42 +220,31 @@ public class DemixingPlugin implements FlutterPlugin, MethodCallHandler, EventCh
     }
 
     /**
-     * Reshape the prediction so we can save it in the output wavfiles.
-     * @param prediction One dimensional array with the prediction.
-     * @param numStems The number of stems from the prediction.
-     * @param framesRead The number of frames read in this chunk.
-     * @return float[][][] The prediction with the stem number in first dimension, the number of
-     *                     channel in second dimension and the frames in third dimension.
+     * Copy a single stem prediction into a reusable write buffer.
+     * @param prediction One dimensional array with model output.
+     * @param stemWriteBuffer Reusable output buffer for one stem.
+     * @param stemIndex The stem index in the model output.
+     * @param framesRead The number of frames predicted for this chunk.
+     * @param numChannels The number of channels expected in output wav files.
      */
-    private float[][][] reshapeOutput(float[] prediction, int numStems, int framesRead) {
-        float[][][] outputStems = new float[numStems][STEREO][framesRead];
+    private void fillStemWriteBuffer(float[] prediction, float[] stemWriteBuffer, int stemIndex, int framesRead,
+            int numChannels) {
+        int stemStartIndex = stemIndex * framesRead * STEREO;
 
-        for (int i = 0; i < numStems; i++) {
-            for (int j = 0; j < STEREO; j++) {
-                for (int k = 0; k < framesRead; k++) {
-                    outputStems[i][j][k] = prediction[i * framesRead * STEREO + j * framesRead + k];
-                }
-            }
+        if (numChannels == MONO) {
+            System.arraycopy(prediction, stemStartIndex, stemWriteBuffer, 0, framesRead);
+            return;
         }
 
-        return outputStems;
-    }
+        int leftChannelStart = stemStartIndex;
+        int rightChannelStart = stemStartIndex + framesRead;
 
-    /**
-     * Write the prediction in the output wav files.
-     * @param stemFiles The map linking all the stem names to their wav files.
-     * @param stemNames The names of the different stems (vocals, bass, drums, other).
-     * @param outputStems The three dimension array with all the predictions.
-     * @param numStems The number of stems we predicted.
-     * @param numBufferFrame The number of frames in the buffer to write.
-     * @throws IOException
-     * @throws WavFileException
-     */
-    private void writeToWavFile(Map<String, WavFile> stemFiles, String[] stemNames,
-            float[][][] outputStems, int numStems, int numBufferFrame) throws IOException, WavFileException {
-        for (int i = 0; i < numStems; i++) {
-            Objects.requireNonNull(stemFiles.get(stemNames[i])).writeFrames(outputStems[i], numBufferFrame);
+        for (int frameIndex = 0; frameIndex < framesRead; frameIndex++) {
+            int writeIndex = frameIndex * STEREO;
+            stemWriteBuffer[writeIndex] = prediction[leftChannelStart + frameIndex];
+            stemWriteBuffer[writeIndex + 1] = prediction[rightChannelStart + frameIndex];
         }
+
     }
 
     // Model inference
@@ -287,33 +276,36 @@ public class DemixingPlugin implements FlutterPlugin, MethodCallHandler, EventCh
         long numFrames = wavFile.getNumFrames();
         int nbChunks = (int) (numFrames / numBufferFrame) + 1;
 
-        float[] buffer = new float[numBufferFrame * numChannels];
-        int framesRead = wavFile.readFrames(buffer, numBufferFrame);
+        float[] readBuffer = new float[numBufferFrame * numChannels];
+        float[][] stemWriteBuffers = new float[numStems][numBufferFrame * numChannels];
+        int framesRead = wavFile.readFrames(readBuffer, numBufferFrame);
 
         double currentChunk = 0.0;
 
         // While we have frame to read, we continue the prediction
         while (framesRead != 0) {
+            float[] chunkBuffer = readBuffer;
+
             // Resample sound
             if (wavFile.getSampleRate() != 44100) {
-                buffer = resample(buffer, framesRead, (int) wavFile.getSampleRate(), numChannels);
-                framesRead = buffer.length / numChannels;
+                chunkBuffer = resample(readBuffer, framesRead, (int) wavFile.getSampleRate(), numChannels);
+                framesRead = chunkBuffer.length / numChannels;
             }
 
             // Prepare input tensor
-            Tensor inTensor = preprocessWavChunk(buffer, framesRead, numChannels);
+            Tensor inTensor = preprocessWavChunk(chunkBuffer, framesRead, numChannels);
 
             // Predict with the PyTorch model
             float[] prediction = predict(inTensor);
 
-            // Reshape output so we can write it in output wav files.
-            float[][][] outputStems = reshapeOutput(prediction, numStems, framesRead);
-
-            writeToWavFile(stemFiles, stemNames, outputStems, numStems, framesRead);
+            for (int stemIndex = 0; stemIndex < numStems; stemIndex++) {
+                float[] stemWriteBuffer = stemWriteBuffers[stemIndex];
+                fillStemWriteBuffer(prediction, stemWriteBuffer, stemIndex, framesRead, numChannels);
+                Objects.requireNonNull(stemFiles.get(stemNames[stemIndex])).writeFrames(stemWriteBuffer, 0, framesRead);
+            }
 
             // Get next frames
-            buffer = new float[numBufferFrame * numChannels];
-            framesRead = wavFile.readFrames(buffer, numBufferFrame);
+            framesRead = wavFile.readFrames(readBuffer, numBufferFrame);
 
             // compute current demixing percentage
             currentChunk += 1;
@@ -343,16 +335,20 @@ public class DemixingPlugin implements FlutterPlugin, MethodCallHandler, EventCh
         WavFile wavFile = openWavFile(audioPath);
 
         int numChannels = wavFile.getNumChannels();
-        int numFrames = (int) wavFile.getNumFrames();
+        long numFrames = wavFile.getNumFrames();
         int numStems = 4;
         int numBits = 16;
         int sampleRate = 44100;
+        long outputNumFrames = numFrames;
+        if (wavFile.getSampleRate() != sampleRate) {
+            outputNumFrames = (long) Math.ceil((numFrames * (double) sampleRate) / wavFile.getSampleRate());
+        }
 
         String[] stemNames = new String[] { "vocals", "drums", "bass", "other" };
         Map<String, WavFile> stemFiles = createFiles(stemNames,
                 outputDir,
                 numChannels,
-                numFrames,
+                outputNumFrames,
                 numBits,
                 sampleRate);
 
