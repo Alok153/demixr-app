@@ -7,11 +7,6 @@ on:
   workflow_dispatch:
 
 jobs:
-    - name: 🚫 Disable iOS
-      run: flutter config --no-enable-ios
-  
-    - name: ✅ Accept Android licenses
-      run: yes | sdkmanager --licenses
   build:
     runs-on: ubuntu-latest
 
@@ -20,12 +15,12 @@ jobs:
       - name: 📥 Checkout
         uses: actions/checkout@v4
 
-      # Java
+      # Java (IMPORTANT → use 11 for your old project)
       - name: ☕ Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '11'
 
       # Flutter
       - name: 🐦 Setup Flutter
@@ -33,25 +28,38 @@ jobs:
         with:
           flutter-version: '3.10.0'
 
-      # Dependencies
+      # Install dependencies
       - name: 📦 Install dependencies
         run: flutter pub get
+
+      # Disable iOS (since you deleted it)
+      - name: 🚫 Disable iOS
+        run: flutter config --no-enable-ios
+
+      # Accept Android licenses
+      - name: ✅ Accept Android licenses
+        run: yes | sdkmanager --licenses
+
+      # Install required CMake (VERY IMPORTANT for your error)
+      - name: 🧱 Install CMake 3.10.2
+        run: sdkmanager "cmake;3.10.2.4988404"
 
       # Build APK
       - name: 📱 Build APK
         run: flutter build apk --release
 
-      # Build AAB (Play Store)
+      # Build AAB
       - name: 📦 Build AAB
         run: flutter build appbundle
 
-      # Upload artifacts
+      # Upload APK
       - name: 📤 Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: app-release-apk
           path: build/app/outputs/flutter-apk/app-release.apk
 
+      # Upload AAB
       - name: 📤 Upload AAB
         uses: actions/upload-artifact@v4
         with:
