@@ -1,4 +1,4 @@
-# Demixr mobile application
+# Demixr mobile application updated
 
 > Music source separation on mobile
 
